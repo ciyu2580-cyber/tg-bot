@@ -1,49 +1,60 @@
 import os
-from threading import Thread
-from flask import Flask
+import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from flask import Flask
+from threading import Thread
 
-# --- 1. 防止服务器休眠的 Web 服务 ---
-app_web = Flask('')
+# --------------------------------------------------
+# 已填入你的真实 ID
+ADMIN_ID = 5410690182  
+# --------------------------------------------------
 
-@app_web.route('/')
+app = Flask('')
+
+@app.route('/')
 def home():
-    return "Bot is active and running!"
+    return "Bot is alive!"
 
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app_web.run(host='0.0.0.0', port=port)
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
 
-# --- 2. 机器人的交流逻辑 ---
-# 处理 /start 命令
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_name = update.effective_user.first_name
-    await update.message.reply_text(f"你好，{user_name}！我是你的智能助手，有什么想聊聊的吗？")
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
 
-# 处理普通聊天消息
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_received = update.message.text
-    # 收到什么就自动回复
-    reply_text = f"收到你的消息啦！你刚才说的是：“{text_received}”"
-    await update.message.reply_text(reply_text)
+    user_id = update.message.from_user.id
+    text = update.message.text
 
-# --- 3. 启动程序 ---
+    # 1. 如果是你（管理员）在回复某条被转发的消息
+    if user_id == ADMIN_ID:
+        if update.message.reply_to_message and update.message.reply_to_message.text:
+            reply_msg = update.message.reply_to_message.text
+            if "ID:" in reply_msg:
+                try:
+                    # 从转发消息中提取原发送者的 ID
+                    target_id = int(reply_msg.split("ID:")[1].split("\n")[0].strip())
+                    # 以机器人的名义给对方发消息
+                    await context.bot.send_message(chat_id=target_id, text=text)
+                    await update.message.reply_text("✅ 已成功以机器人名义回复！")
+                except Exception as e:
+                    await update.message.reply_text(f"❌ 发送失败: {e}")
+        return
+
+    # 2. 如果是其他用户给机器人发消息，自动转发给你
+    sender_name = update.message.from_user.full_name
+    forward_text = f"📩 **收到新消息**\nID:{user_id}\n来自: {sender_name}\n\n内容：\n{text}\n\n💡 *按住此消息选择『回复(Reply)』即可自由回信*"
+    
+    # 转发给你
+    await context.bot.send_message(chat_id=ADMIN_ID, text=forward_text, parse_mode='Markdown')
+    # 自动给对方一个提示
+    await update.message.reply_text("消息已收到，我会尽快回复你！")
+
 if __name__ == '__main__':
-    # 后台线程启动 Web 服务
-    server_thread = Thread(target=run_web)
-    server_thread.start()
-
-    # 获取系统环境变量中的 Token
+    Thread(target=run_flask).start()
+    
     token = os.environ.get("BOT_TOKEN")
-    if not token:
-        print("错误：未检测到 BOT_TOKEN 环境变量！")
-    else:
-        app_bot = ApplicationBuilder().token(token).build()
-        
-        # 绑定处理器
-        app_bot.add_handler(CommandHandler("start", start))
-        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
-        
-        print("机器人已成功启动！")
-        app_bot.run_polling()
+    if token:
+        application = ApplicationBuilder().token(token).build()
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.run_polling()
